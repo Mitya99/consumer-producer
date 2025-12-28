@@ -16,7 +16,7 @@ services:
     depends_on:
       - ollama
     environment:
-      - OLLAMA_MODEL=llama3.1
+      - OLLAMA_MODEL=llama3.2
       - OLLAMA_HOST=ollama:11434
     networks:
       - app-network
