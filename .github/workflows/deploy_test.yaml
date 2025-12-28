@@ -24,11 +24,10 @@ jobs:
           ls -la
           docker-compose down
           docker-compose up -d --build
-          sleep 300
-          sleep 50
       - name: Show logs
         run: |
           sleep 20
           sleep 50
           # Показываем логи ВСЕХ контейнеров
-          docker-compose logs
+          docker-compose logs -f --tail=0 &
+          sleep 20
