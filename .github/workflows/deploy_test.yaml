@@ -1,5 +1,4 @@
 name: Deploy_test
-
 on:
   push:
     branches: [ main ]
@@ -8,6 +7,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # ЭТО ОБЯЗАТЕЛЬНО! Без этого код не склонируется
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
       - name: Install Docker Compose
         run: |
           sudo apt-get update
@@ -16,6 +19,8 @@ jobs:
       
       - name: Deploy with Docker Compose
         run: |
+          echo "Текущая директория: $(pwd)"
+          echo "Файлы:"
           ls -la
           docker-compose down
           docker-compose up -d --build
