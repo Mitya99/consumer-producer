@@ -29,5 +29,5 @@ jobs:
           sleep 20
           sleep 50
           # Показываем логи ВСЕХ контейнеров
-          docker-compose logs -f --tail=0 &
+          docker-compose logs -f --tail=0 
           sleep 20
