@@ -16,5 +16,6 @@ jobs:
       
       - name: Deploy with Docker Compose
         run: |
+          ls -la
           docker-compose down
           docker-compose up -d --build
