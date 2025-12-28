@@ -16,4 +16,6 @@ func main() {
 		fmt.Print("Ollama error: " + err.Error())
 	}
 	fmt.Print(ollamaResp)
+	os.Stdout.Write([]byte(ollamaResp))
+    os.Stdout.Sync()
 }
