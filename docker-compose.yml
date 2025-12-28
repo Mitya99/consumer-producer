@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  ollama:
+    build: ./ollama
+    #image: ai/llama3.2:1B-Q4_0 #ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app-network
+
+  go-app:
+    build: ./consumer-producer
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_MODEL=llama3.1
+      - OLLAMA_HOST=ollama:11434
+    networks:
+      - app-network
+    # Для разработки - монтируем код
+    volumes:
+      - ./consumer-producer:/app
+
+volumes:
+  ollama_data:
+
+networks:
+  app-network:
+    driver: bridge
