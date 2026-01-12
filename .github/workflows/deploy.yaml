@@ -1,0 +1,26 @@
+name: Deploy
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Docker Compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose
+          docker-compose --version
+      
+      - name: Deploy with Docker Compose
+        run: |
+          docker-compose down
+          docker-compose up -d --build
+      - name: Show logs
+        run: |
+          # Показываем логи контейнеров (-f будет следить и workflow не завершится, но без него action глушится раньше, чем увидим логи)
+          docker-compose logs -f
