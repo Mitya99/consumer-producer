@@ -23,7 +23,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/Mitya99/my_ollama
+          images: ghcr.io/mitya99/my_ollama
           flavor: latest=true
           tags: |
             type=ref,event=branch
@@ -45,6 +45,6 @@ jobs:
           # relative path to the place where source code with Dockerfile is located
           context: ollama/
           # Note: tags has to be all lower-case
-          tags: ghcr.io/Mitya99/my_ollama:latest
+          tags: ghcr.io/mitya99/my_ollama:latest
           labels: ${{ steps.meta.outputs.labels }}
           push: true
