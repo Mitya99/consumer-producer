@@ -1,36 +1,230 @@
 package main
 
 import (
-	"consumer-producer/logger"
-	"consumer-producer/ollamaclient" // my ollama
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
+	"consumer-producer/ollamaclient" // my ollama
+
+	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
+	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry/serde"
+	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry/serde/jsonschema"
+	"consumer-producer/logger"
+	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 )
 
-func main() {
+type KafkaInMessage string
 
+type KafkaOutMessage struct {
+	Key   string  `json:"key"`
+	Value message `json:"value"`
+}
+
+type message struct {
+	Name string `json:"name"`
+	Rows string `json:"rows"`
+	Text string `json:"text"`
+}
+
+type enrichedMessage struct {
+	Name    string `json:"name"`
+	Rows    string `json:"rows"`
+	Summary string `json:"summary"` // ← NEW (ответ LLM)
+}
+
+func newTLSCOnfig() *tls.Config {
+	// Only the <cluster_name>-cluster-ca-cert secret is required by clients.
+	//ca.crt The current certificate for the cluster CA.
+	cert, err := os.ReadFile("/tmp/ca/ca.crt")
+	if err != nil {
+		logger.Error("could not open CA certificate file: %v", zap.String("err", err.Error()))
+		return nil
+	}
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(cert)
+	// Secret name 	Field within secret 	Description
+
+	// <user_name> 	user.p12                PKCS #12 store for storing certificates and keys.
+
+	//              user.password         	Password for protecting the PKCS #12 store.
+
+	//              user.crt           	    Certificate for the user, signed by the clients CA
+
+	//              user.key            	Private key for the user
+	cer, err := tls.LoadX509KeyPair("/tmp/client/user.crt", "/tmp/client/user.key")
+	if err != nil {
+		logger.Error("could not open client ertificate file: %v", zap.String("err", err.Error()))
+		return nil
+	}
+	config := &tls.Config{RootCAs: caCertPool,
+		Certificates: []tls.Certificate{cer}}
+	return config
+}
+
+func Serialize(m *enrichedMessage, ser *jsonschema.Serializer, topic string) []byte {
+	payload, err := ser.Serialize(topic, &m)
+	if err != nil {
+		logger.Error("Failed to serialize payload: %s\n", zap.String("err", err.Error()))
+		//os.Exit(1)
+	}
+	return payload
+}
+
+func newKafkaWriter(kafkaURL, topic string) *kafka.Writer {
+	return &kafka.Writer{
+		Addr:     kafka.TCP(kafkaURL),
+		Topic:    topic,
+		Balancer: &kafka.Hash{},
+		Transport: &kafka.Transport{
+			TLS: newTLSCOnfig(),
+		},
+	}
+}
+
+func main() {
 	//Loger Initialization
 	logger.InitLogger()
 	defer logger.CloseLogger()
 
-	// 	Obtaining a brief summary of the retrieved set of strings (using LLM)
-	var fifty_str string = "Гостиная Анны Павловны начала понемногу наполняться. Приехала высшая знать Петербурга, люди самые разнородные по возрастам и характерам, но одинаковые по обществу, в каком все жили; приехала дочь князя Василия, красавица Элен, заехавшая за отцом, чтобы с ним вместе ехать на праздник посланника. Она была в шифре и бальном платье. Приехала и известная, как la femme la plus séduisante de Pétersbourg [самая обворожительная женщина в Петербурге,], молодая, маленькая княгиня Болконская, прошлую зиму вышедшая замуж и теперь не выезжавшая в  большой свет по причине своей беременности, но ездившая еще на небольшие вечера. Приехал князь Ипполит, сын князя Василия, с Мортемаром, которого он представил; приехал и аббат Морио и многие другие."
-	prompt := "Сделай краткое содержание текста, выдавая в ответ ничего лишнего кроме результата: " + fifty_str
+	BootstrapServers := os.Getenv("BOOTSTRAP_SERVERS")
+	topic := os.Getenv("TOPIC")
+	groupID := os.Getenv("GROUP_ID")
+	schemaRegistryURL := os.Getenv("SCHEMA_REGISTRY_URL")
+	outTopic := os.Getenv("OUT_TOPIC")
 
-	ollamaResp, err := ollamaclient.Generate(prompt)
+	var wg sync.WaitGroup
+
+	// SIGTERM
+	cancelChan := make(chan os.Signal, 1)
+	signal.Notify(cancelChan, syscall.SIGTERM, syscall.SIGINT)
+	done := make(chan bool, 1)
+
+	go func() {
+		sig := <-cancelChan
+		logger.Info("Caught signal", zap.String("Signal", sig.String()))
+		logger.Info("Wait for 1 second to finish processing")
+		time.Sleep(1 * time.Second)
+		logger.Info("Exiting......")
+		done <- true
+		os.Exit(0)
+	}()
+
+	schemaregistryConfig := schemaregistry.NewConfig(fmt.Sprintf("https://%s", schemaRegistryURL))
+	schemaregistryConfig.SslCaLocation = "/tmp/ca/ca.crt"
+	client, err := schemaregistry.NewClient(schemaregistryConfig)
 	if err != nil {
-		logger.Error("Ошибка при обращении к Ollama: %s\n", zap.String("err", err.Error()))
+		logger.Error("Failed to create schema registry client: %s\n", zap.String("err", err.Error()))
 		os.Exit(1)
 	}
 
-	// Логирование результата
-	logger.Info("Сгенерировано краткое содержание",
-		zap.String("текст", fifty_str),
-		zap.String("краткое_содержание", ollamaResp),
-	)
+	deser, err := jsonschema.NewDeserializer(client, serde.ValueSerde, jsonschema.NewDeserializerConfig())
+	if err != nil {
+		logger.Error("Failed to create deserializer: %s\n", zap.String("err", err.Error()))
+		os.Exit(1)
+	}
 
-	// Вывод результата
-	fmt.Println(ollamaResp)
+	// Subject name in schema registry must match topic name!!!!!!!
+	ser, err := jsonschema.NewSerializer(client, serde.ValueSerde, jsonschema.NewSerializerConfig())
+	if err != nil {
+		logger.Error("Failed to create serializer: %s\n", zap.String("err", err.Error()))
+		os.Exit(1)
+	}
+
+	dialer := &kafka.Dialer{
+		Timeout:   10 * time.Second,
+		DualStack: true,
+		TLS:       newTLSCOnfig(),
+	}
+
+	r := kafka.NewReader(kafka.ReaderConfig{
+		Brokers: []string{BootstrapServers},
+		GroupID: groupID,
+		Topic:   topic,
+		Dialer:  dialer,
+	})
+	defer r.Close()
+
+	writer := newKafkaWriter(BootstrapServers, outTopic)
+	defer writer.Close()
+
+	wg.Add(1)
+	go func() {
+		maxRetries := 10
+		retryDelay := time.Second * 2
+		var m kafka.Message
+		for {
+			defer wg.Done()
+			// make a new reader that consumes from topic
+			for i := range maxRetries {
+				m, err = r.ReadMessage(context.Background())
+				if err != nil {
+					logger.Error("Failed to read message", zap.String("err", err.Error()))
+
+					if i == maxRetries-1 {
+						// Last attempt failed
+						os.Exit(1)
+					}
+					time.Sleep(retryDelay)
+					continue
+				}
+				break
+			}
+			var inValue KafkaInMessage
+			err = deser.DeserializeInto(topic, m.Value, &inValue)
+			if err != nil {
+				logger.Error("Failed to deserialize payload", zap.String("err", err.Error()))
+			}
+			logger.Info("Message from kafka", zap.String("Topic", m.Topic), zap.Int("Partition", m.Partition),
+				zap.Int64("Offset", m.Offset), zap.String("Key", string(m.Key)), zap.String("Value", fmt.Sprintf("%#v", inValue)))
+
+			// Convert string to struct
+			var outMessage KafkaOutMessage
+			err = json.Unmarshal([]byte(inValue), &outMessage)
+			if err != nil {
+				logger.Error("Failed to convert json string to struct", zap.String("err", err.Error()))
+			}
+			logger.Info("Value from kafka", zap.String("Key", outMessage.Key), zap.String("name", outMessage.Value.Name),
+				zap.String("rows", outMessage.Value.Rows), zap.String("text", outMessage.Value.Text))
+
+			// 	Obtaining a brief summary of the retrieved set of strings (using LLM)
+			prompt := "Сделай краткое содержание текста, выдавая в ответ ничего лишнего кроме результата: " + outMessage.Value.Text
+
+			ollamaResp, err := ollamaclient.Generate(prompt)
+			if err != nil {
+				logger.Error("Ollama error", zap.String("err", err.Error()))
+			}
+
+			// Создаём объект, который будем отправлять в outTopic
+			enriched := enrichedMessage{
+				Name:    outMessage.Value.Name,
+				Rows:    outMessage.Value.Rows,
+				Summary: ollamaResp, // ← NEW
+			}
+
+			// Send data to out topic
+			msg := kafka.Message{
+				Key:   []byte(outMessage.Key),
+				Value: Serialize(&enriched, ser, outTopic), //&outMessage.Value
+			}
+			err = writer.WriteMessages(context.Background(), msg)
+			if err != nil {
+				logger.Error("Failed to write message to topic: %s\n", zap.String("err", err.Error()))
+				return
+			} else {
+				logger.Info("produced", zap.String("key", string(msg.Key)), zap.String("message", string(msg.Value)))
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+	// Wait for SITERM or SIGINT
+	<-done
 }
