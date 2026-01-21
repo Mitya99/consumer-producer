@@ -15,14 +15,13 @@ COPY . .
 RUN make build
 
 # Стадия запуска
-FROM alpine:latest AS runtime
+FROM debian:bookworm-slim AS runtime
 
 # Устанавливаем рабочую директорию
 WORKDIR /root/
 
 # Устанавливаем зависимости времени выполнения
-# Устанавливаем glibc совместимость в Alpine
-RUN apk --no-cache add ca-certificates libc6-compat
+RUN apk --no-cache add ca-certificates
 
 # Копируем скомпилированное приложение из стадии builder
 COPY --from=builder /app/kafka-consumer-producer .
