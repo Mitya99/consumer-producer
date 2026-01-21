@@ -2,7 +2,7 @@
 FROM golang:latest AS builder
 
 # Устанавливаем рабочую директорию внутри контейнера
-WORKDIR /app
+WORKDIR /workspace
 
 # Копируем файлы модулей сначала (для лучшего кэширования)
 COPY go.mod go.sum Makefile ./
@@ -18,20 +18,21 @@ RUN make build
 FROM debian:bookworm-slim AS runtime
 
 # Устанавливаем рабочую директорию
-WORKDIR /root/
+WORKDIR /
 
 # Устанавливаем зависимости времени выполнения
-RUN apk --no-cache add ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Копируем скомпилированное приложение из стадии builder
-COPY --from=builder /app/kafka-consumer-producer .
+COPY --from=builder /workspace/kafka-consumer-producer /kafka-consumer-producer
 
 # Проверяем бинарник
 RUN ldd ./kafka-consumer-producer || true 
 
 # Создаем непривилегированного пользователя для безопасности
-RUN adduser -D -s /bin/sh appuser
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 USER appuser
 
-# Запускаем приложение
-CMD ["./kafka-consumer-producer"]
+ENTRYPOINT ["/kafka-consumer-producer"]
