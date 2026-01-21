@@ -21,7 +21,8 @@ FROM alpine:latest AS runtime
 WORKDIR /root/
 
 # Устанавливаем зависимости времени выполнения
-RUN apk --no-cache add ca-certificates
+# Устанавливаем glibc совместимость в Alpine
+RUN apk --no-cache add ca-certificates libc6-compat
 
 # Копируем скомпилированное приложение из стадии builder
 COPY --from=builder /app/kafka-consumer-producer .
