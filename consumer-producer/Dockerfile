@@ -27,7 +27,7 @@ RUN apk --no-cache add ca-certificates
 COPY --from=builder /app/kafka-consumer-producer .
 
 # Проверяем бинарник
-RUN ldd ./kafka-consumer-producer || true
+RUN ldd ./kafka-consumer-producer || true 
 
 # Создаем непривилегированного пользователя для безопасности
 RUN adduser -D -s /bin/sh appuser
